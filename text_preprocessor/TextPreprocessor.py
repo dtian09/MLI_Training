@@ -5,7 +5,6 @@ from gensim.parsing.preprocessing import (
     strip_numeric,
     remove_stopwords,
     strip_multiple_whitespaces,
-    strip_short,
     stem_text
 )
 
