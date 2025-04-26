@@ -21,7 +21,6 @@ class TextPreprocessor:
             strip_numeric,
             remove_stopwords,
             strip_multiple_whitespaces,
-            strip_short,
             stem_text
         ]
         self.embedding_model = embedding_model
