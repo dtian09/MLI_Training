@@ -1,4 +1,5 @@
 import numpy as np
+from collections import Counter
 from gensim.parsing.preprocessing import (
     preprocess_string,
     strip_punctuation,
@@ -31,25 +32,7 @@ class TextPreprocessor:
     def preprocess_corpus(self, corpus):
         return [self.preprocess(doc) for doc in corpus]
 
-    def token_known(self, token):
-        return token in self.embedding_model
-
-    def count_unknown_tokens(self, tokens):
-        return sum(1 for token in tokens if not self.token_known(token))
-
-    def filter_corpus(self, corpus, max_unknowns=0):
-        cleaned_corpus = []
-        for doc in corpus:
-            tokens = self.preprocess(doc)
-            unknown_count = self.count_unknown_tokens(tokens)
-            if tokens and unknown_count <= max_unknowns:
-                cleaned_corpus.append(tokens)
-        return cleaned_corpus
-
     def _initialize_unk_vector(self):
-        """
-        Lazy initialization of UNK vector based on mean of all word vectors.
-        """
         if self.embedding_model is None:
             raise ValueError("Cannot initialize UNK vector without embedding model.")
 
@@ -83,7 +66,7 @@ class TextPreprocessor:
         embeddings = self.get_text_embeddings(text)
         if not embeddings:
             return np.zeros(self.embedding_model.vector_size)
-        
+
         embeddings = np.array(embeddings)
         if pooling == "mean":
             return embeddings.mean(axis=0)
@@ -95,29 +78,90 @@ class TextPreprocessor:
     def get_corpus_embedding_pooled(self, corpus, pooling="mean"):
         return [self.get_text_embedding_pooled(doc, pooling) for doc in corpus]
 
-if __name__ == "__main__":
-   
-import torch
+    def filter_corpus_by_word_coverage(self, corpus, p=95):
+        """
+        Filter the corpus to contain the most frequently occuring tokens 
+        (the smallest set of tokens) whose cumulative frequency >= p% (e.g. 95%) of total words.
+        """
+        tokenized_corpus = self.preprocess_corpus(corpus)
 
-# Initialize preprocessor
-embeddings = torch.load("msmarco_wordvectors.kv")
-preprocessor = TextPreprocessor(embedding_model=embeddings)
+        # Flatten and count frequencies
+        all_tokens = [token for doc in tokenized_corpus for token in doc]
+        total_word_count = len(all_tokens)
+        token_freq = Counter(all_tokens)
 
-# Example text
-text = "Gensim is efficient at text processing!"
+        # Sort tokens by frequency descending
+        sorted_tokens = token_freq.most_common()
 
-# Get token-level embeddings
-embeddings = preprocessor.get_text_embeddings(text)
-print(f"Found {len(embeddings)} token embeddings.")
+        # Accumulate until reaching p% of total word count
+        cumulative = 0
+        most_frequent_tokens = set()
+        for token, freq in sorted_tokens:
+            cumulative += freq
+            most_frequent_tokens.add(token)
+            if (cumulative / total_word_count) * 100 >= p:
+                break
 
-# Get pooled vector
-pooled_vector = preprocessor.get_text_embedding_pooled(text, pooling="mean")
-print(f"Pooled vector shape: {pooled_vector.shape}")
+        # Now filter corpus
+        filtered_corpus = []
+        filtered_word_count = 0
+        for doc in tokenized_corpus:
+            filtered_doc = [token for token in doc if token in most_frequent_tokens]
+            if filtered_doc:
+                filtered_corpus.append(filtered_doc)
+                filtered_word_count += len(filtered_doc)
 
-# Corpus example
-corpus = [
-    "Word2Vec rocks NLP.",
-    "Efficient text processing."
-]
-corpus_vectors = preprocessor.get_corpus_embedding_pooled(corpus, pooling="mean")
-print(f"Corpus pooled embeddings: {[vec.shape for vec in corpus_vectors]}")
+        # Report
+        word_retention = (filtered_word_count / total_word_count) * 100
+        print(f"[Info] Word retention after filtering: {word_retention:.2f}%")
+        print(f"[Info] Number of most frequent unique tokens: {len(most_frequent_tokens)}")
+
+        return filtered_corpus
+    
+    if __name__ == "__main__":
+    from gensim.models import KeyedVectors
+
+    # Load word vectors
+    embeddings = KeyedVectors.load("msmarco_wordvectors.kv")
+    preprocessor = TextPreprocessor(embedding_model=embeddings)
+
+    # Example corpus
+    corpus = [
+        "Word2Vec rocks NLP.",
+        "Efficient text processing.",
+        "Natural Language Processing is amazing.",
+        "Deep Learning is revolutionary.",
+        "I love machine learning.",
+        "Quantum AI will change the world."
+    ]
+
+    # 1. Filter corpus to achieve 95% word coverage
+    filtered_corpus = preprocessor.filter_corpus_by_word_coverage(corpus, p=95)
+    
+    ''' output
+    [Info] Word retention after filtering: 95.13%
+    [Info] Number of allowed unique tokens: 18
+    '''
+
+    print("\nFiltered and tokenized corpus:")
+    for doc in filtered_corpus:
+        print(doc)
+    Filtered and tokenized corpus:
+
+    '''    
+    output:
+
+    Filtered and tokenized corpus:
+
+    ['word2vec', 'rock', 'nlp']
+    ['effici', 'text', 'process']
+    ['natur', 'languag', 'process']
+    ['deep', 'learn', 'revolutionari']
+    ['love', 'machin', 'learn']
+    ['quantum', 'ai', 'chang', 'world']
+    '''
+    
+    # 2. Get embeddings
+    corpus_vectors = preprocessor.get_corpus_embedding_pooled([' '.join(doc) for doc in filtered_corpus], pooling="mean")
+    print(f"\nCorpus pooled embeddings: {[vec.shape for vec in corpus_vectors]}")
+
